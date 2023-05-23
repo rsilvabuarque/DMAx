@@ -1,6 +1,4 @@
-import re
 import os
-import sys
 import subprocess
 import numpy as np
 import random
