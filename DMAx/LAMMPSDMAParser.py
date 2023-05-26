@@ -55,12 +55,11 @@ def plot_error_bars(*data_dicts):
     plt.suptitle("Storage Modulus, Loss Modulus, and Loss Tangent Error Analysis")
     plt.show()
 
-        
 class DMADataParser:
     def __init__(self, calc_dir):
         self.calc_dir = calc_dir
     
-    def pressureparser(self, output_xy=True, plot=False, plot_title="Pressure vs runtime", pressdir=None, apply_savgol_filter=False, savgol_windowlength=10, savgol_polyorder=5, apply_gaussian_filter=False, gaussian_sigma=6, **kwargs):
+    def pressureparser(self, dielectric=False, output_xy=True, plot=False, plot_title="Pressure vs runtime", pressdir=None, apply_gaussian_filter=False, gaussian_sigma=6, force_pressure_remove=True, **kwargs):
         simulation_dir = kwargs.get("simulation_dir", self.calc_dir)
         # Function to generate a pressure.txt file with human-readable values for the pressures in all directions over the runtime of the simulation
         press_dict = {"x": "Pxx", "y": "Pyy", "z": "Pzz"}
@@ -68,26 +67,27 @@ class DMADataParser:
         if pressdir != None:
             pressdir = pressdir
         else:
-            grepPressDir = subprocess.check_output("grep 'remap v' in.*", shell=True).decode("utf-8").split()
-            pressdir = grepPressDir[5]
-        if "pressure.txt" not in os.listdir():
-            part1 = "i=`grep '{}' -n *.log | sed -e 's/:/  /g' | ".format(press_dict[pressdir])
-            subprocess.call(part1 + "awk '{print $1}'`", shell=True)
-            subprocess.call("awk -v i=$i '{if ( FNR > i && NF == 16) print $0}' *.log > pressure.txt", shell=True)
-            #subprocess.call("sed -i 1d pressure.txt", shell=True)
-        #df = pd.read_csv("pressure.txt", header=None, delimiter=r"\s+")
-        df = pd.read_csv("pressure.txt", skiprows=[0], header=None, delim_whitespace=True)
-        timestep = df[13][0]
-        if pressdir == "x":
-            item = 7
-        elif pressdir == "y":
-            item = 8
-        else:
-            item = 9
-        runtime = np.array(df[0]) * timestep
-        pressure = np.array(df[item]) * - 0.101325 #in MPa
-        if apply_savgol_filter:
-            pressure = savgol_filter(pressure, savgol_windowlength, savgol_polyorder)
+            if dielectric:
+                grepPressDir = subprocess.check_output("grep 'Field direction = ' in.*", shell=True).decode("utf-8").split()
+                pressdir = grepPressDir[5]
+                pressure_mult = 0.101325
+            else:
+                grepPressDir = subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()
+                pressdir = grepPressDir[5]
+                pressure_mult = -0.101325
+        if "pressure.txt" not in os.listdir() or force_pressure_remove:
+            log_file = [i for i in os.listdir(simulation_dir) if i[-3:] == "log"][0]
+            with open(log_file, 'r') as file:
+                lines = file.readlines()
+            start_NVT_prod = [i for i, line in enumerate(lines) if 'Step          Time          TotEng         KinEng          Temp          PotEng' in line][0]
+            end_NVT_prod = [i for i, line in enumerate(lines) if 'Loop time of' in line][-1]
+            if start_NVT_prod and end_NVT_prod:
+                NVT_prod_lines = lines[start_NVT_prod:end_NVT_prod]
+                NVT_prod_data = [line.split() for line in NVT_prod_lines]
+                NVT_prod_df = pd.DataFrame(NVT_prod_data[1:], columns=NVT_prod_data[0])
+                NVT_prod_df.to_csv('output.txt', sep='\t', index=False)
+        runtime = np.array(NVT_prod_df["Time"].astype(float))
+        pressure = np.array(NVT_prod_df[press_dict[pressdir]].astype(float)) * pressure_mult #in MPa
         if apply_gaussian_filter:
             pressure = gaussian_filter1d(pressure, gaussian_sigma)
         if plot:
@@ -99,36 +99,39 @@ class DMADataParser:
         if output_xy:
             return runtime, pressure, simulation_dir
     
-    def fit_sin(self, tt, yy, plot_pressure=False, plot_title="Pressure vs runtime for DMA (+ Scipy Fitting)", plot_color='red', do_prints=False, **kwargs):
+    def fit_sin(self, runtime, pressure, dielectric=False, plot_pressure=False, plot_title="Pressure vs runtime (+ Scipy Fitting)", fit_color='red', original_signal_color='green', do_prints=False, **kwargs):
         '''Fit sin to the input time sequence, and return fitting parameters "amp", "omega", "phase", "offset", "freq", "period" and "fitfunc"'''
         simulation_dir = kwargs.get("simulation_dir", self.calc_dir)
         os.chdir(simulation_dir)
-        tt = np.array(tt)
-        yy = np.array(yy)
-        ff = np.fft.fftfreq(len(tt), (tt[1]-tt[0]))   # assume uniform spacing
-        Fyy = abs(np.fft.fft(yy))
-        guess_freq = 1 / float(subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()[8])
+        runtime = np.array(runtime)
+        pressure = np.array(pressure)
+        ff = np.fft.fftfreq(len(runtime), (runtime[1]-runtime[0]))   # assume uniform spacing
+        if dielectric:
+            guess_freq = 2 * 1 / float(subprocess.check_output("grep 'periodfs' in.*", shell=True).decode("utf-8").split()[3])
+        else:
+            guess_freq = 1 / float(subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()[8])
         guess_w = 2 * np.pi * guess_freq
-        #guess_freq = abs(ff[np.argmax(Fyy[1:])+1])   # excluding the zero frequency "peak", which is related to offset
-        guess_amp = np.std(yy) * 2.**0.5
-        guess_offset = np.mean(yy)
+        guess_amp = np.std(pressure) * 2.**0.5
+        guess_offset = np.mean(pressure)
         guess = np.array([guess_amp, 0., guess_offset])
 
         def sinfunc(t, A, p, c):  return A * np.sin(guess_w * t + p) + c
-        popt, pcov = sp.optimize.curve_fit(sinfunc, tt, yy, p0=guess)
+        popt, pcov = sp.optimize.curve_fit(sinfunc, runtime, pressure, p0=guess)
         A, p, c = popt
         fitfunc = lambda t: A * np.sin(guess_w * t + p) + c
-        y = fitfunc(tt)
+        y = fitfunc(runtime)
         if plot_pressure:
-            plt.scatter(tt, yy, s=1, label="Pressure data")
+            plt.scatter(runtime, pressure, s=1, label="Pressure data")
             plt.ticklabel_format(style="scientific", scilimits=(0,4))
             plt.title(plot_title)
             plt.xlabel("Runtime (fs)")
             plt.ylabel("Pressure (MPa)")
-            plt.plot(tt, y, plot_color, label="Scipy fitted curve")
+            plt.plot(runtime, y, fit_color, label="Scipy fitted curve")
+            plt.plot(runtime, A * np.sin(guess_w * runtime) + c, original_signal_color, label="Original Field Applied", linestyle="--")
             plt.legend()
         sin_offset = p
-        mae, rmse, r2 = mean_absolute_error(yy, y), mean_squared_error(yy, y, squared=False), r2_score(yy, y)
+        print(sin_offset)
+        mae, rmse, r2 = mean_absolute_error(pressure, y), mean_squared_error(pressure, y, squared=False), r2_score(pressure, y)
         if do_prints:
             print('Scipy Fitted Parameters:')
             #print(tpe_best)
@@ -139,8 +142,7 @@ class DMADataParser:
             print("Scipy Real 'phi': " + str(sin_offset))
             print("Scipy Loss Tangent is: " + str(np.tan(sin_offset)))
             print("MAE, RMSE, R2: {}, {}, {}".format(mae, rmse, r2))
-        #return {"amp": A, "omega": w, "phase": p, "offset": c, "freq": f, "period": 1./f, "fitfunc": fitfunc, "maxcov": np.max(pcov), "rawres": (guess,popt,pcov)}
-        return {"Fit Curve": y, "Predicted Frequency": guess_w / (2 * np.pi) * 1e6, "Real Phi": sin_offset, "Loss Tangent": np.tan(sin_offset), "Storage Modulus": np.cos(sin_offset), "Loss Modulus": np.sin(sin_offset), "MAE": mae, "RMSE": rmse, "R2": r2}
+        return {"Fit Curve": y, "Predicted Frequency": guess_w / (2 * np.pi) * 1e6, "Real Phi": sin_offset, "Loss Tangent": np.tan(sin_offset), "Storage Modulus": np.cos(sin_offset), "Loss Modulus": np.sin(sin_offset), "MAE": mae, "RMSE": rmse, "R2": r2}        
 
 class DMAErrorDataParser(DMADataParser):
     def error_parser(self, add_savgol_filter=False, add_gaussian_filter=False):
