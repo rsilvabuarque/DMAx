@@ -233,5 +233,96 @@ class DMAMasterCurveDataParser(DMADataParser):
             ax2.set_yscale('linear')
             ax3.set_xscale('log')
             ax3.set_yscale('linear')
+            
+class ConvAnalysisParser(DMADataParser):
     
+    def runtime_conv_analysis(self, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
+        os.chdir(self.calc_dir)
+        os.chdir("frequencies")
+        if "noise_filter_run" in os.listdir("."):
+            os.chdir("noise_filter_run")
+            os.chdir("../")
+            freq_directories = os.listdir(".")
+            freq_directories.remove("noise_filter_run")
+        else:
+            freq_directories = os.listdir(".")
+            
+        for freq_dir in freq_directories:
+            os.chdir(freq_dir) # Changing into strain directory 
+            os.chdir(os.listdir(".")[0])
+            #print("RuntimeCWD", os.getcwd())
+            num_cycles = []
+            LT_list = []
+            diff_list = []
+            optimalcycles_lst = []
+            timesteps, pressure, sim_dir = self.pressureparser(**{"simulation_dir": "."})
+            period = int(subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()[8])
+            dump_freq = int(subprocess.check_output("grep 'thermo' in.*", shell=True).decode("utf-8").split()[-1])
+            runtime = int(subprocess.check_output("grep 'run' in.*", shell=True).decode("utf-8").split()[-1])
+            calc_cycles =  int(runtime / period)
+            datapoints_per_cycle = round(period / dump_freq)
+            final_result = []
+            old_results = 0
+            for cycles in range(1, calc_cycles + 1):
+                sliced_runtime, sliced_pressure = timesteps[:datapoints_per_cycle * cycles], pressure[:datapoints_per_cycle * cycles]
+                results = self.fit_sin(sliced_runtime, sliced_pressure, **{"simulation_dir": "."})["Loss Tangent"]
+                if old_results == 0 or abs(results - old_results) >= 0.1:
+                    old_results = results
+                else:
+                    final_result.append(cycles)
+                LT_list.append(results)
+                num_cycles.append(cycles)
+            plt.subplot(1,2,1)
+            plt.plot(num_cycles, LT_list)
+            plt.title("Loss Tangent vs. Total Cycles")
+            plt.xlabel('Number of Cycles ')
+            plt.ylabel('Loss Tangent')
+            print("Optimal Number of Cycles", final_result[0])
+            os.chdir("../")    
+    
+    def strainsize_conv_analysis(self, calc_dir, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
+            os.chdir(self.calc_dir)
+            os.chdir("frequencies")
+            if "noise_filter_run" in os.listdir("."):
+                freq_directories_strain = os.listdir(".")
+                freq_directories_strain.remove("noise_filter_run")
+            else:
+                freq_directories_strain = (os.listdir("."))
+                #Since, there is going to only one frequency value
+            for frequency in freq_directories_strain:
+                os.chdir(frequency)
+                #Getting the list of strain subdirectories within frequency directory
+                strain_lst = []
+                LT_strainlst = []
+                LM_strainlst = []
+                SM_strainlst = []
+                for subdir in os.listdir("."):
+                    strain_val = int(subdir[:-9])
+                    strain_lst.append(strain_val)
+                    os.chdir(subdir)
+                    #print("StrainCWD", os.getcwd())
+                    timesteps_strain, pressure_strain, sim_dirstrain = self.pressureparser(**{"simulation_dir": "."}, apply_gaussian_filter=add_gaussian_filter, gaussian_sigma=gaussian_sigma)
+                    results_strain = self.fit_sin(timesteps_strain, pressure_strain, **{"simulation_dir": sim_dirstrain})
+                    LT_strainlst.append(results_strain["Loss Tangent"])
+                    LM_strainlst.append(results_strain["Loss Modulus"])
+                    SM_strainlst.append(results_strain["Storage Modulus"])
+                    os.chdir("../")
+            # Create the figure and subplots
+            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
 
+            # Plot the data on each subplot
+            ax1.scatter(strain_lst,LT_strainlst)
+            ax2.scatter(strain_lst, LM_strainlst)
+            ax3.scatter(strain_lst, SM_strainlst)
+
+            # Set labels and titles for each subplot
+            ax1.set_ylabel('Loss Tangent')
+            ax2.set_ylabel('Loss Modulus')
+            ax3.set_ylabel('Storage Modulus')
+            ax3.set_xlabel('Strain')
+
+            # Adjust the spacing between subplots
+            plt.subplots_adjust(hspace=0.4)
+
+            # Display the plot
+            plt.show()

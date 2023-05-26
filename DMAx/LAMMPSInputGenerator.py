@@ -173,7 +173,7 @@ class LammpsInputGenerator:
         else:
             with open('/dev/null', 'w') as devnull:
                 subprocess.call('/expanse/lustre/projects/csd626/tpascal/scripts/createLammpsInput.pl -b {} -f {} -s {} -r {} -q {} -o {} -t {}'.format(self.structure_file, self.forcefield, self.suffix, self.reax_rexpon_file, self.qeq, self.options, self.template), shell=True, stdout=devnull, stderr=devnull)
-        subprocess.call('cp $MASTER_FILES/slurm_script.master {}.lammps.slurm'.format(self.suffix), shell=True)
+        subprocess.call('cp /expanse/lustre/projects/csd626/ricardosb/master_files/slurm_script.master {}.lammps.slurm'.format(self.suffix), shell=True)
         subprocess.call("sed -i 's/0.0 12345678/{} {}/g' in.*".format(temperature, randomNumber(8)), shell=True)
 
     def slurm_modifier(self, **kwargs):
@@ -202,7 +202,7 @@ class DMAInputGenerator(LammpsInputGenerator):
             subprocess.call("rm *singlepoint", shell=True)
             in_line = int(subprocess.check_output("grep -n 'NVT production dynamics' in.* | cut -d : -f 1", shell=True))
             subprocess.call("head -n {} in.* > in_head".format(in_line), shell=True)
-            subprocess.call("cat in_head $MASTER_FILES/in.master_mech_loss > in.{}".format(self.suffix), shell=True)
+            subprocess.call("cat in_head /expanse/lustre/projects/csd626/ricardosb/master_files/in.master_mech_loss > in.{}".format(self.suffix), shell=True)
             subprocess.call("rm *in_head*", shell=True)
         else:
             subprocess.call('cp {} in.{}'.format(master_inputs["in"], self.suffix), shell=True)
