@@ -374,7 +374,7 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
             os.chdir("../")
 
 class DMAMasterCurveInputGenerator(DMAInputGenerator):
-    def MasterCurveCLI(self, polymer_glass_temperature, standard_numcycles, standard_strain, num_frequencies=20, num_temperatures=10, temperature_interval=10, custom_frequency_range=None, noise_filter_run=True, **kwargs):
+    def MasterCurveCLI(self, polymer_glass_temperature, standard_numcycles, standard_strain, num_frequencies=20, num_temperatures=10, temperature_interval=10, custom_frequency_range=None, custom_temperature_range=None, noise_filter_run=True, **kwargs):
         """
         Method for generating the LAMMPS input files for generating a mechanical loss master curve.
         ----------
@@ -399,9 +399,12 @@ class DMAMasterCurveInputGenerator(DMAInputGenerator):
             frequency_range = custom_freq_range
         else:
             frequency_range = [round(i, 3) for i in np.logspace(log10(10e9), log10(500e9), num=num_frequencies, endpoint=True, base=10)]
-        temperature_range = np.arange(num_temperatures) * temperature_interval
-        temperature_range -= (num_temperatures // 2) * temperature_interval
-        temperature_range += polymer_glass_temperature
+        if custom_temperature_range:
+            temperature_range = custom_temperature_range
+        else:
+            temperature_range = np.arange(num_temperatures) * temperature_interval
+            temperature_range -= (num_temperatures // 2) * temperature_interval
+            temperature_range += polymer_glass_temperature
         for temp in temperature_range:
             if not "{}K".format(temp) in os.listdir("."):
                 os.mkdir("{}K".format(temp))
