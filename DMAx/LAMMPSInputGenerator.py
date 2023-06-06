@@ -188,7 +188,7 @@ class LammpsInputGenerator:
         subprocess.call(sed_string, shell=True)
 
 class DMAInputGenerator(LammpsInputGenerator):
-    def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=10, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
+    def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=5, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
         temperature = kwargs.get('structure_file', self.temperature)
         pressure = kwargs.get("pressure", self.pressure)
         calc_dir = kwargs.get("calc_dir", self.calc_dir)
@@ -251,21 +251,24 @@ class DMAInputGenerator(LammpsInputGenerator):
         # Reducing the temperature update time to avoid issues at high frequencies
         subprocess.call("sed -i 's/tdamp/{}/g' in.*".format(tdamp), shell=True)
 
-    def noise_filter_CLI(self, **kwargs):
+    def noise_filter_CLI(self, min_frequency, numcycles, **kwargs):
         calc_dir = kwargs.get('calc_dir', self.calc_dir)
-        os.chdir(calc_dir)
         temperature = kwargs.get('temperature', self.temperature)
         pressure = kwargs.get('pressure', self.pressure)
+        os.chdir(calc_dir)
+        period = (1 / min_frequency) / 1e-15
         if not "noise_filter_run" in os.listdir(calc_dir):
             os.mkdir("noise_filter_run")
         os.chdir("noise_filter_run")
         self.createLammpsInput(**{"calc_dir": calc_dir, "temperature": temperature})
-        subprocess.call("sed -i 's/run                  5000000 # run for 15 ns/run                  500000 # run for 0.5 ns/g' in.*", shell=True)
+        # Calculate the maximum runtime from all frequencies observed
+        max_runtime = round(period * numcycles)
+        subprocess.call("sed -i 's/run                  5000000 # run for 15 ns/run                  {} # run for {} ns/g' in.*".format(max_runtime, round(max_runtime * 1e-6, 2)), shell=True)
         self.slurm_modifier(**{"temperature": temperature, "pressure": pressure})
         subprocess.call("rm *singlepoint", shell=True)
         os.chdir("../")
 
-    def error_analysis_DMA(self, frequencies=[25e9], num_error_calcs=5, noise_filter_run=False, **kwargs):
+    def error_analysis_DMA(self, frequencies=[25e9], num_error_calcs=5, standard_numcycles=5, noise_filter_run=False, **kwargs):
         oscillation_amplitude_percentage = kwargs.get('oscillation_amplitude_percentage', 0.04)
         numcycles = kwargs.get('numcycles', 10)
         temperature = kwargs.get('structure_file', self.temperature)
@@ -277,7 +280,7 @@ class DMAInputGenerator(LammpsInputGenerator):
             os.mkdir("frequencies")
         os.chdir("frequencies")
         if noise_filter_run:
-            self.noise_filter_CLI(**{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
+            self.noise_filter_CLI(min(frequencies), **{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
         for freq in frequencies:
             for i in range(num_error_calcs):
                 prefix = "{}_mech_loss_{}K_{}_{}".format(self.suffix, temperature, frequency_dirname_parser(freq), i)
@@ -293,7 +296,7 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
     """
     LAMMPS input generator for the convergence analysis of parameters for Dynamic Mechanical Analysis.
     """
-    def numCyclesConvAnalysisCLI(self, std_freq_Hz=25e9, custom_numcycles=None, bulk_modulus_GPa=None, strain_direction=None, noise_filter_run=True, **kwargs):
+    def numCyclesConvAnalysisCLI(self, std_freq_Hz=25e9, custom_numcycles=None, standard_numcycles=5, bulk_modulus_GPa=None, strain_direction=None, noise_filter_run=True, **kwargs):
         """
         Method for generating the LAMMPS input files for a runtime convergence for Dynamic Mechanical Analysis.
         Parameters
@@ -313,27 +316,28 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
         temperature = kwargs.get('temperature', self.temperature)
         pressure = kwargs.get('pressure', self.pressure)
         os.chdir(calc_dir)
-        if not "frequencies" in os.listdir("."):
-            os.mkdir("frequencies")
-        os.chdir("frequencies")
-        if noise_filter_run:
-            self.noise_filter_CLI(**{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
-        freq_dirname = frequency_dirname_parser(std_freq_Hz)
-        os.mkdir(freq_dirname)
-        os.chdir(freq_dirname)
-        numcycles = 5
         if custom_numcycles:
-            strain_range_pc = custom_numcycles
+            numcycles = custom_numcycles
+        else:
+            numcycles = standard_numcycles
         if bulk_modulus_GPa:
             if bulk_modulus_GPa < 100:
                 numcycles = 10
             else:
                 numcycles = 5
+        if not "frequencies" in os.listdir("."):
+            os.mkdir("frequencies")
+        os.chdir("frequencies")
+        if noise_filter_run:
+            self.noise_filter_CLI(std_freq_Hz, numcycles, **{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
+        freq_dirname = frequency_dirname_parser(std_freq_Hz)
+        os.mkdir(freq_dirname)
+        os.chdir(freq_dirname)
         os.mkdir("{}cycles".format(numcycles))
         os.chdir("{}cycles".format(numcycles))
         self.createLammpsInputDMA(std_freq_Hz, numcycles=numcycles, temperature=temperature, **{"calc_dir": ".", "stressdir": strain_direction})
 
-    def strainSizeConvAnalysisCLI(self, std_freq_Hz=25e9, custom_strain_range=None, bulk_modulus_GPa=None, strain_direction=None, standard_numcycles=5, noise_filter_run=True, **kwargs):
+    def strainSizeConvAnalysisCLI(self, std_freq_Hz=25e9, custom_strain_range=None, bulk_modulus_GPa=None, strain_direction=None, standard_numcycles=5, standard_numstrains=10, noise_filter_run=True, crystalline=False, **kwargs):
         """
         Method for generating the LAMMPS input files for a strain size convergence for Dynamic Mechanical Analysis. The strain percentages are proportional to the size of the unit cell in the direction of the strain
         Parameters
@@ -355,11 +359,14 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
             os.mkdir("frequencies")
         os.chdir("frequencies")
         if noise_filter_run:
-            self.noise_filter_CLI(**{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
+            self.noise_filter_CLI(std_freq_Hz, standard_numcycles, **{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
         freq_dirname = frequency_dirname_parser(std_freq_Hz)
         os.mkdir(freq_dirname)
         os.chdir(freq_dirname)
-        strain_range_pc = np.array([1, 2, 4, 8, 16, 32])
+        if crystalline:
+            strain_range_pc = np.array([round(i, 3) for i in np.logspace(log10(0.001), log10(10), num=standard_numstrains, endpoint=True, base=10)])
+        else:
+            strain_range_pc = np.array([round(i, 3) for i in np.logspace(log10(0.1), log10(100), num=standard_numstrains, endpoint=True, base=10)])
         if custom_strain_range:
             strain_range_pc = custom_strain_range
         if bulk_modulus_GPa:
@@ -374,7 +381,7 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
             os.chdir("../")
 
 class DMAMasterCurveInputGenerator(DMAInputGenerator):
-    def MasterCurveCLI(self, polymer_glass_temperature, standard_numcycles, standard_strain, num_frequencies=20, num_temperatures=10, temperature_interval=10, custom_frequency_range=None, custom_temperature_range=None, noise_filter_run=True, **kwargs):
+    def MasterCurveCLI(self, polymer_glass_temperature, standard_numcycles, standard_strain_pc, num_frequencies=20, num_temperatures=10, temperature_interval=10, custom_frequency_range=None, custom_temperature_range=None, noise_filter_run=True, **kwargs):
         """
         Method for generating the LAMMPS input files for generating a mechanical loss master curve.
         ----------
@@ -382,7 +389,7 @@ class DMAMasterCurveInputGenerator(DMAInputGenerator):
             Glass temperature transition of the studied polymer.
         standard_numcycles: int
             Standard number of periods to run all simulations.
-        standard_strain: float
+        standard_strain_pc: float
             Standard strain to run all simulations. Values must be in percentage (Ex.: 1%, 2% -> strain_range=[1, 2]).
         strain_direction: str
             Strain direction of the simulation. If not provided, will default to the longest axis of the unit cell.
@@ -410,14 +417,14 @@ class DMAMasterCurveInputGenerator(DMAInputGenerator):
                 os.mkdir("{}K".format(temp))
             os.chdir("{}K".format(temp))
             if noise_filter_run:
-                self.noise_filter_CLI(**{ "calc_dir": ".", "temperature": temp, "pressure": pressure})
+                self.noise_filter_CLI(min(frequency_range), standard_numcycles, **{ "calc_dir": ".", "temperature": temp, "pressure": pressure})
             for freq in frequency_range:
                 prefix = "{}_mech_loss_{}K_{}".format(self.suffix, temp, frequency_dirname_parser(freq))
                 print("Creating inputs for " + prefix)
                 if not "{}".format(frequency_dirname_parser(freq)) in os.listdir("."):
                     os.mkdir("{}".format(frequency_dirname_parser(freq)))
                 os.chdir("{}".format(frequency_dirname_parser(freq)))
-                self.createLammpsInputDMA(freq, oscillation_amplitude_percentage=standard_strain, numcycles=standard_numcycles, temperature=temp, **{"calc_dir": ".", "stressdir": stressdir})
+                self.createLammpsInputDMA(freq, oscillation_amplitude_percentage=standard_strain_pc/100, numcycles=standard_numcycles, temperature=temp, **{"calc_dir": ".", "stressdir": stressdir})
                 os.chdir("../")
             os.chdir("../")
 

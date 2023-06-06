@@ -130,7 +130,6 @@ class DMADataParser:
             plt.plot(runtime, A * np.sin(guess_w * runtime) + c, original_signal_color, label="Original Field Applied", linestyle="--")
             plt.legend()
         sin_offset = p
-        print(sin_offset)
         mae, rmse, r2 = mean_absolute_error(pressure, y), mean_squared_error(pressure, y, squared=False), r2_score(pressure, y)
         if do_prints:
             print('Scipy Fitted Parameters:')
@@ -250,7 +249,6 @@ class ConvAnalysisParser(DMADataParser):
         for freq_dir in freq_directories:
             os.chdir(freq_dir) # Changing into strain directory 
             os.chdir(os.listdir(".")[0])
-            #print("RuntimeCWD", os.getcwd())
             num_cycles = []
             LT_list = []
             diff_list = []
@@ -280,7 +278,7 @@ class ConvAnalysisParser(DMADataParser):
             print("Optimal Number of Cycles", final_result[0])
             os.chdir("../")    
     
-    def strainsize_conv_analysis(self, calc_dir, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
+    def strainsize_conv_analysis(self, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
             os.chdir(self.calc_dir)
             os.chdir("frequencies")
             if "noise_filter_run" in os.listdir("."):
@@ -296,33 +294,42 @@ class ConvAnalysisParser(DMADataParser):
                 LT_strainlst = []
                 LM_strainlst = []
                 SM_strainlst = []
+                R2_strainlst = []
                 for subdir in os.listdir("."):
-                    strain_val = int(subdir[:-9])
+                    strain_val = float(subdir[:-9])
                     strain_lst.append(strain_val)
                     os.chdir(subdir)
-                    #print("StrainCWD", os.getcwd())
-                    timesteps_strain, pressure_strain, sim_dirstrain = self.pressureparser(**{"simulation_dir": "."}, apply_gaussian_filter=add_gaussian_filter, gaussian_sigma=gaussian_sigma)
+                    timesteps_strain, pressure_strain, sim_dirstrain = self.pressureparser(**{"simulation_dir": os.getcwd()}, apply_gaussian_filter=add_gaussian_filter, gaussian_sigma=gaussian_sigma)
                     results_strain = self.fit_sin(timesteps_strain, pressure_strain, **{"simulation_dir": sim_dirstrain})
-                    LT_strainlst.append(results_strain["Loss Tangent"])
-                    LM_strainlst.append(results_strain["Loss Modulus"])
                     SM_strainlst.append(results_strain["Storage Modulus"])
+                    LM_strainlst.append(results_strain["Loss Modulus"])
+                    LT_strainlst.append(results_strain["Loss Tangent"])
+                    R2_strainlst.append(results_strain["R2"])
                     os.chdir("../")
+                    
+            # Sort the SM, LM, and LT data in ascending order
+            sorted_data = sorted(zip(strain_lst, SM_strainlst, LM_strainlst, LT_strainlst, R2_strainlst))
+            strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst = zip(*sorted_data)
+            
             # Create the figure and subplots
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(5, 10))
 
             # Plot the data on each subplot
-            ax1.scatter(strain_lst,LT_strainlst)
-            ax2.scatter(strain_lst, LM_strainlst)
-            ax3.scatter(strain_lst, SM_strainlst)
+            ax1.plot(strain_lst, SM_strainlst, '--o')
+            ax2.plot(strain_lst, LM_strainlst, '--o')
+            ax3.plot(strain_lst, LT_strainlst, '--o')
+            ax4.plot(strain_lst, R2_strainlst, '--o')
 
             # Set labels and titles for each subplot
-            ax1.set_ylabel('Loss Tangent')
+            ax1.set_ylabel('Storage Modulus')
             ax2.set_ylabel('Loss Modulus')
-            ax3.set_ylabel('Storage Modulus')
-            ax3.set_xlabel('Strain')
+            ax3.set_ylabel('Loss Tangent')
+            ax4.set_ylabel('R2 Score')
+            ax4.set_xlabel('Strain (%)')
+            ax4.set_xscale('log')
 
-            # Adjust the spacing between subplots
-            plt.subplots_adjust(hspace=0.4)
-
+            # Print out the best strain based on R2 score
+            max_index = R2_strainlst.index(max(R2_strainlst))
+            print("Best strain size: {}".format(strain_lst[max_index]))
             # Display the plot
             plt.show()
