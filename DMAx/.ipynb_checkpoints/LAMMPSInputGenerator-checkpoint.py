@@ -201,47 +201,6 @@ class LammpsInputGenerator:
         subprocess.call(sed_string, shell=True)
         
 
-class TwoptInputGenerator(LammpsInputGenerator):
-    def create2ptInput(self, temperature=300, pressure=1, runtime1=1000000, runtime2=200000, timestep_unit_fs=1, master_inputs=None, **kwargs):
-        temperature = kwargs.get('structure_file', self.temperature)
-        pressure = kwargs.get("pressure", self.pressure)
-        calc_dir = kwargs.get("calc_dir", self.calc_dir)
-        os.chdir(calc_dir)
-        if not master_inputs:
-            self.createLammpsInput(**{"calc_dir": calc_dir, "temperature": temperature})
-            self.slurm_modifier(**{"temperature": temperature, "pressure": pressure})
-            subprocess.call("rm *singlepoint", shell=True)
-            in_line = int(subprocess.check_output("grep -n 'NVT production dynamics' in.* | cut -d : -f 1", shell=True))
-            subprocess.call("head -n {} in.* > in_head".format(in_line), shell=True)
-            subprocess.call("cat in_head $MASTER_FILES/in.master_2pt > in.{}".format(self.suffix), shell=True)
-            subprocess.call("rm *in_head*", shell=True)
-        else:
-            subprocess.call('cp {} in.{}'.format(master_inputs["in"], self.suffix), shell=True)
-            subprocess.call('cp {} data.{}'.format(master_inputs["data"], self.suffix), shell=True)
-            # For the next command line to work, the lines (variable             input string in.*) and (variable             sname string *) must have the * replaced by the word 'master'
-            subprocess.call("sed -i 's/master/{}/g' in.*".format(self.suffix), shell=True)
-        # Select the runtimes for the NVT Production Dynamics and for the following 2pt NVT
-        subprocess.call("sed -i 's/runtime1/{}/g' in.*".format(runtime1), shell=True)
-        subprocess.call("sed -i 's/runtime2/{}/g' in.*".format(runtime2), shell=True)
-        # Increasing the maximum number of neighbors since it seems to be a problem for some supercells
-        subprocess.call("sed -i 's/check yes/check yes one 3000/g' in.*", shell=True)
-
-    def temp_analysis_2pt(self, temperature_range, **kwargs):
-        pressure = kwargs.get("pressure", self.pressure)
-        calc_dir = kwargs.get("calc_dir", self.calc_dir)
-        os.chdir(calc_dir)
-        if not "temperatures" in os.listdir("."):
-            os.mkdir("temperatures")
-        os.chdir("temperatures")
-        for temp in temperature_range:
-            if not "{}K".format(temp) in os.listdir("."):
-                os.mkdir("{}K".format(temp))
-            os.chdir("{}K".format(temp))
-            prefix = "{}_2pt_{}K".format(self.suffix, temp)
-            print("Creating inputs for " + prefix)
-            self.create2ptInput(freq, temperature=temp, **{"calc_dir": "."})
-            os.chdir("../")
-
 class DMAInputGenerator(LammpsInputGenerator):
     def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=5, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
         temperature = kwargs.get('structure_file', self.temperature)
