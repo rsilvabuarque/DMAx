@@ -7,12 +7,23 @@ import random
 from math import log10
 
 def randomNumber(digits):
-    # Function utilized to generate a random number for modifying the velocity seed for each calculation.
+    """
+    Function utilized to generate a random number for modifying the velocity seed for each calculation.
+
+    Arguments:
+    digits -- Number of digits in the random number to be generated.
+    """
     lower = 10**(digits-1)
     upper = 10**digits - 1
     return random.randint(lower, upper)
 
 def frequency_dirname_parser(frequency):
+    """
+    Function utilized to parse the directory names of .
+
+    Arguments:
+    digits -- Number of digits in the random number to be generated.
+    """
     freq_range_dict = {"Hz": 1e0, "KHz": 1e3, "MHz": 1e6, "GHz": 1e9, "THz": 1e12, "PHz": 1e15, "EHz": 1e18}
     for freq_mag, freq in freq_range_dict.items():
         dirname_val = frequency / freq
@@ -167,6 +178,7 @@ class LammpsInputGenerator:
         template = kwargs.get('template', self.template)
         temperature = kwargs.get('temperature', self.temperature)
         omit_prints = kwargs.get('omit_prints', True)
+        random_seed = kwargs.get("random_seed", False)
         os.chdir(calc_dir)
         if not omit_prints:
             subprocess.call('/expanse/lustre/projects/csd626/tpascal/scripts/createLammpsInput.pl -b {} -f {} -s {} -r {} -q {} -o {} -t {}'.format(self.structure_file, self.forcefield, self.suffix, self.reax_rexpon_file, self.qeq, self.options, self.template), shell=True)
@@ -174,7 +186,8 @@ class LammpsInputGenerator:
             with open('/dev/null', 'w') as devnull:
                 subprocess.call('/expanse/lustre/projects/csd626/tpascal/scripts/createLammpsInput.pl -b {} -f {} -s {} -r {} -q {} -o {} -t {}'.format(self.structure_file, self.forcefield, self.suffix, self.reax_rexpon_file, self.qeq, self.options, self.template), shell=True, stdout=devnull, stderr=devnull)
         subprocess.call('cp /expanse/lustre/projects/csd626/ricardosb/master_files/slurm_script.master {}.lammps.slurm'.format(self.suffix), shell=True)
-        subprocess.call("sed -i 's/0.0 12345678/{} {}/g' in.*".format(temperature, randomNumber(8)), shell=True)
+        if random_seed:
+            subprocess.call("sed -i 's/0.0 12345678/{} {}/g' in.*".format(temperature, randomNumber(8)), shell=True)
 
     def slurm_modifier(self, **kwargs):
         account = kwargs.get('account', self.account)
@@ -186,6 +199,7 @@ class LammpsInputGenerator:
         pressure = kwargs.get('pressure', self.pressure)
         sed_string = "sed -i -e 's/master_prefix/{}/g ; s/master_account/{}/g ; s/master_nodes/{}/g ; s/master_ntasks_per_node/{}/g ; s/master_time/{}/g ; s/master_temp/{}/g ; s/master_partition/{}/g ; s/master_press/{}/g' *.slurm".format(self.suffix, account, nodes, ntasks_per_node, time, temperature, partition, pressure)
         subprocess.call(sed_string, shell=True)
+        
 
 class DMAInputGenerator(LammpsInputGenerator):
     def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=5, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
@@ -193,11 +207,12 @@ class DMAInputGenerator(LammpsInputGenerator):
         pressure = kwargs.get("pressure", self.pressure)
         calc_dir = kwargs.get("calc_dir", self.calc_dir)
         stressdir = kwargs.get("stressdir", None)
+        random_seed = kwargs.get("random_seed", False)
         os.chdir(calc_dir)
         timestep = timestep_unit_fs
         period = (1 / frequency) / (timestep * 1e-15)
         if not master_inputs:
-            self.createLammpsInput(**{"calc_dir": calc_dir, "temperature": temperature})
+            self.createLammpsInput(**{"calc_dir": calc_dir, "temperature": temperature, "random_seed": random_seed})
             self.slurm_modifier(**{"temperature": temperature, "pressure": pressure})
             subprocess.call("rm *singlepoint", shell=True)
             in_line = int(subprocess.check_output("grep -n 'NVT production dynamics' in.* | cut -d : -f 1", shell=True))
@@ -233,6 +248,9 @@ class DMAInputGenerator(LammpsInputGenerator):
         dump_frequency = period / datapoints_per_cycle
         tdamp = 100
         # Adjusting the calculation timestep to adapt for high frequencies
+        self.in_modifier_DMA(period, dump_frequency, timestep, tdamp, numcycles)
+        
+    def in_modifier_DMA(self, period, dump_frequency, timestep, tdamp, numcycles):
         runtime_multiplier = 1
         while dump_frequency < 1:
             timestep /= 10
@@ -249,23 +267,28 @@ class DMAInputGenerator(LammpsInputGenerator):
         # Increasing the maximum number of neighbors since it seems to be a problem for some supercells
         subprocess.call("sed -i 's/check yes/check yes one 3000/g' in.*", shell=True)
         # Reducing the temperature update time to avoid issues at high frequencies
-        subprocess.call("sed -i 's/tdamp/{}/g' in.*".format(tdamp), shell=True)
+        subprocess.call("sed -i 's/tdamp/{}/g' in.*".format(tdamp), shell=True)        
 
-    def noise_filter_CLI(self, min_frequency, numcycles, **kwargs):
+    def noise_filter_CLI(self, min_frequency, numcycles, datapoints_per_cycle=500, timestep=1, tdamp=100, **kwargs):
         calc_dir = kwargs.get('calc_dir', self.calc_dir)
         temperature = kwargs.get('temperature', self.temperature)
         pressure = kwargs.get('pressure', self.pressure)
         os.chdir(calc_dir)
         period = (1 / min_frequency) / 1e-15
+        dump_frequency = period / datapoints_per_cycle
         if not "noise_filter_run" in os.listdir(calc_dir):
             os.mkdir("noise_filter_run")
         os.chdir("noise_filter_run")
         self.createLammpsInput(**{"calc_dir": calc_dir, "temperature": temperature})
         # Calculate the maximum runtime from all frequencies observed
-        max_runtime = round(period * numcycles)
-        subprocess.call("sed -i 's/run                  5000000 # run for 15 ns/run                  {} # run for {} ns/g' in.*".format(max_runtime, round(max_runtime * 1e-6, 2)), shell=True)
-        self.slurm_modifier(**{"temperature": temperature, "pressure": pressure})
+        runtime = round(period * numcycles)
         subprocess.call("rm *singlepoint", shell=True)
+        in_line = int(subprocess.check_output("grep -n 'NVT production dynamics' in.* | cut -d : -f 1", shell=True))
+        subprocess.call("head -n {} in.* > in_head".format(in_line), shell=True)
+        subprocess.call("cat in_head /expanse/lustre/projects/csd626/ricardosb/master_files/in.master_noise_filter_run > in.{}".format(self.suffix), shell=True)
+        subprocess.call("rm *in_head*", shell=True)
+        self.in_modifier_DMA(period, dump_frequency, timestep, tdamp, numcycles)
+        self.slurm_modifier(**{"temperature": temperature, "pressure": pressure})
         os.chdir("../")
 
     def error_analysis_DMA(self, frequencies=[25e9], num_error_calcs=5, standard_numcycles=5, noise_filter_run=False, **kwargs):
@@ -280,7 +303,7 @@ class DMAInputGenerator(LammpsInputGenerator):
             os.mkdir("frequencies")
         os.chdir("frequencies")
         if noise_filter_run:
-            self.noise_filter_CLI(min(frequencies), **{ "calc_dir": ".", "temperature": temperature, "pressure": pressure})
+            self.noise_filter_CLI(min(frequencies), **{ "calc_dir": os.getcwd(), "temperature": temperature, "pressure": pressure})
         for freq in frequencies:
             for i in range(num_error_calcs):
                 prefix = "{}_mech_loss_{}K_{}_{}".format(self.suffix, temperature, frequency_dirname_parser(freq), i)
@@ -288,7 +311,7 @@ class DMAInputGenerator(LammpsInputGenerator):
                 if not "{}_{}".format(frequency_dirname_parser(freq), i) in os.listdir("."):
                     os.mkdir("{}_{}".format(frequency_dirname_parser(freq), i))
                 os.chdir("{}_{}".format(frequency_dirname_parser(freq), i))
-                self.createLammpsInputDMA(freq, oscillation_amplitude_percentage=oscillation_amplitude_percentage, numcycles=numcycles, temperature=temperature, pressure=pressure, **{"calc_dir": ".", "stressdir": stressdir})
+                self.createLammpsInputDMA(freq, oscillation_amplitude_percentage=oscillation_amplitude_percentage, numcycles=numcycles, temperature=temperature, pressure=pressure, **{"calc_dir": os.getcwd(), "stressdir": stressdir, "random_seed": True})
                 os.chdir("../")
 
 

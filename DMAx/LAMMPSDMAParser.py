@@ -11,6 +11,78 @@ from mastercurves import MasterCurve
 from mastercurves.transforms import Multiply
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+def extract_tot_eng(input_dir_path, output_file_path=None, plot=False, label=None, invert_sign=False):
+    # Search for files with .log extension in the input directory
+    log_files = [f for f in os.listdir(input_dir_path) if f.endswith('.log')]
+
+    # Check if there are any .log files in the input directory
+    if not log_files:
+        raise ValueError('No .log files found in the input directory')
+
+    # Use only the first .log file found in the directory
+    input_file_path = os.path.join(input_dir_path, log_files[0])
+
+    # Use a regular expression pattern to find all occurrences of TotEng and extract the associated value
+    tot_eng_values = []
+    tot_eng_values_floats = []
+    energy_labels = []
+    with open(input_file_path, "r") as input_file:
+        count = 0
+        for line in input_file:
+            minimization, NVT_heat, NPT, cell_deform = 'print                "500 steps CG Minimization"', 'print                "NVT dynamics to heat system"', 'print                "NPT dynamics with an isotropic pressure of 1atm."', 'print                "deforming cell"'
+            if minimization in line:
+                count = 1
+            if NVT_heat in line:
+                count = 1
+            if NPT in line:
+                count = 1
+            if cell_deform in line:
+                count = 1
+            if "TotEng   =" in line:
+                if count == 1:
+                    try:
+                        tot_eng_values.append(line.split()[2])
+                        tot_eng_values_floats.append(float(line.split()[2]))
+                        energy_labels.append(1)
+                        count = 0
+                    except:
+                        print(line.split()[2])
+                        continue
+                else:
+                    try:
+                        tot_eng_values.append(line.split()[2])
+                        tot_eng_values_floats.append(float(line.split()[2]))
+                        energy_labels.append(0)
+                    except:
+                        print(line.split()[2])
+                        continue
+        
+    # Determine the output file path
+    if output_file_path is None:
+        output_file_path = os.path.join(os.path.dirname(input_file_path), 'TotEng.txt')
+
+    if output_file_path is not None:
+        # Open the output file for writing
+        with open(output_file_path, 'w') as output_file:
+            # Write the extracted TotEng values to the output file
+            for value in tot_eng_values:
+                output_file.write(value + '\n')
+    
+    # Plot the energy
+    if plot:
+        matching_indices = [i for i, val in enumerate(energy_labels) if val == 1]
+        matching_values = [tot_eng_values_floats[i] for i in matching_indices]
+        labels = ['Minimization', 'NVT Heat', 'NPT Start', 'NPT Deform']
+        plt.title("Total Energy vs Runtime for NVT Heat / NPT Steps")
+        plt.xlabel("Step")
+        plt.ylabel("Total Energy (kcal/mole)")
+        plt.ticklabel_format(style="scientific", scilimits=(0,4))
+        plt.scatter(range(len(tot_eng_values_floats)), tot_eng_values_floats, label=label, s=1)
+        plt.scatter(matching_indices, matching_values, c='y', marker='o', s=50)
+        for i, label in zip(matching_indices, labels):
+            plt.text(i, tot_eng_values_floats[i], label, ha='center', va='bottom', fontsize=8)
+    return tot_eng_values_floats
+
 def frequency_dirname_parser(frequency):
     freq_range_dict = {"Hz": 1e0, "KHz": 1e3, "MHz": 1e6, "GHz": 1e9, "THz": 1e12, "PHz": 1e15, "EHz": 1e18}
     for freq_mag, freq in freq_range_dict.items():
@@ -59,23 +131,30 @@ class DMADataParser:
     def __init__(self, calc_dir):
         self.calc_dir = calc_dir
     
-    def pressureparser(self, dielectric=False, output_xy=True, plot=False, plot_title="Pressure vs runtime", pressdir=None, apply_gaussian_filter=False, gaussian_sigma=6, force_pressure_remove=True, **kwargs):
+    def pressureparser(self, dielectric=False, noise_filter_run=False, output_xy=True, plot=False, plot_title="Pressure vs runtime", pressdir=None, apply_gaussian_filter=False, gaussian_sigma=6, force_pressure_remove=True, **kwargs):
         simulation_dir = kwargs.get("simulation_dir", self.calc_dir)
         # Function to generate a pressure.txt file with human-readable values for the pressures in all directions over the runtime of the simulation
         press_dict = {"x": "Pxx", "y": "Pyy", "z": "Pzz"}
         os.chdir(simulation_dir)
         if pressdir != None:
             pressdir = pressdir
+            if dielectric or noise_filter_run:
+                pressure_mult = 0.101325
+            else:
+                pressure_mult = -0.101325
         else:
             if dielectric:
                 grepPressDir = subprocess.check_output("grep 'Field direction = ' in.*", shell=True).decode("utf-8").split()
                 pressdir = grepPressDir[5]
                 pressure_mult = 0.101325
+            elif noise_filter_run:
+                pressdir = None
+                pressure_mult = 0.101325
             else:
                 grepPressDir = subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()
                 pressdir = grepPressDir[5]
                 pressure_mult = -0.101325
-        if "pressure.txt" not in os.listdir() or force_pressure_remove:
+        if "output.txt" not in os.listdir() or force_pressure_remove:
             log_file = [i for i in os.listdir(simulation_dir) if i[-3:] == "log"][0]
             with open(log_file, 'r') as file:
                 lines = file.readlines()
@@ -83,11 +162,20 @@ class DMADataParser:
             end_NVT_prod = [i for i, line in enumerate(lines) if 'Loop time of' in line][-1]
             if start_NVT_prod and end_NVT_prod:
                 NVT_prod_lines = lines[start_NVT_prod:end_NVT_prod]
+                NVT_prod_lines = [line for line in NVT_prod_lines if "SHAKE" not in line and "Bond" not in line]
                 NVT_prod_data = [line.split() for line in NVT_prod_lines]
-                NVT_prod_df = pd.DataFrame(NVT_prod_data[1:], columns=NVT_prod_data[0])
+                try:
+                    NVT_prod_df = pd.DataFrame(NVT_prod_data[1:], columns=NVT_prod_data[0])
+                except:
+                    print("The simulation {} did not run successfully".format(simulation_dir))
+                    return None, None
                 NVT_prod_df.to_csv('output.txt', sep='\t', index=False)
         runtime = np.array(NVT_prod_df["Time"].astype(float))
-        pressure = np.array(NVT_prod_df[press_dict[pressdir]].astype(float)) * pressure_mult #in MPa
+        if noise_filter_run:
+            pressures = [np.array(NVT_prod_df[pressdir].astype(float)) * pressure_mult for pressdir in press_dict.values()] #in MPa
+            pressure = np.mean(pressures, axis=0)
+        else:
+            pressure = np.array(NVT_prod_df[press_dict[pressdir]].astype(float)) * pressure_mult #in MPa
         if apply_gaussian_filter:
             pressure = gaussian_filter1d(pressure, gaussian_sigma)
         if plot:
@@ -97,12 +185,14 @@ class DMADataParser:
             plt.ticklabel_format(style="scientific", scilimits=(0,4))
             plt.scatter(runtime, pressure, s=1)
         if output_xy:
-            return runtime, pressure, simulation_dir
+            return runtime, pressure
     
     def fit_sin(self, runtime, pressure, dielectric=False, plot_pressure=False, plot_title="Pressure vs runtime (+ Scipy Fitting)", fit_color='red', original_signal_color='green', do_prints=False, **kwargs):
         '''Fit sin to the input time sequence, and return fitting parameters "amp", "omega", "phase", "offset", "freq", "period" and "fitfunc"'''
         simulation_dir = kwargs.get("simulation_dir", self.calc_dir)
         os.chdir(simulation_dir)
+        if runtime is None and pressure is None:
+            return {"Fit Curve": None, "Predicted Frequency": None, "Real Phi": None, "Loss Tangent": None, "Storage Modulus": None, "Loss Modulus": None, "MAE": None, "RMSE": None, "R2": None}      
         runtime = np.array(runtime)
         pressure = np.array(pressure)
         ff = np.fft.fftfreq(len(runtime), (runtime[1]-runtime[0]))   # assume uniform spacing
@@ -141,7 +231,7 @@ class DMADataParser:
             print("Scipy Real 'phi': " + str(sin_offset))
             print("Scipy Loss Tangent is: " + str(np.tan(sin_offset)))
             print("MAE, RMSE, R2: {}, {}, {}".format(mae, rmse, r2))
-        return {"Fit Curve": y, "Predicted Frequency": guess_w / (2 * np.pi) * 1e6, "Real Phi": sin_offset, "Loss Tangent": np.tan(sin_offset), "Storage Modulus": np.cos(sin_offset), "Loss Modulus": np.sin(sin_offset), "MAE": mae, "RMSE": rmse, "R2": r2}        
+        return {"Original Curve": pressure, "Fit Curve": y, "Predicted Frequency": guess_w / (2 * np.pi) * 1e6, "Real Phi (rad)": sin_offset, "Real Phi (deg)": sin_offset * 180 / np.pi, "Loss Tangent": np.tan(sin_offset), "Storage Modulus": np.cos(sin_offset), "Loss Modulus": np.sin(sin_offset), "MAE": mae, "RMSE": rmse, "R2": r2}        
 
 class DMAErrorDataParser(DMADataParser):
     def error_parser(self, add_savgol_filter=False, add_gaussian_filter=False):
@@ -162,8 +252,8 @@ class DMAErrorDataParser(DMADataParser):
         for freq in freq_directories:
             frequency = freq.split("_")[0]
             os.chdir(freq)
-            runtime, pressure, simulation_dir = self.pressureparser(add_savgol_filter=add_savgol_filter, add_gaussian_filter=add_gaussian_filter, **{"simulation_dir": "."})
-            curve_fitting = self.fit_sin(runtime, pressure, **{"simulation_dir": simulation_dir})
+            runtime, pressure = self.pressureparser(add_savgol_filter=add_savgol_filter, add_gaussian_filter=add_gaussian_filter, **{"simulation_dir": os.getcwd()})
+            curve_fitting = self.fit_sin(runtime, pressure, **{"simulation_dir": os.getcwd()})
             SM_dict[frequency].append(curve_fitting["Storage Modulus"])
             LM_dict[frequency].append(curve_fitting["Loss Modulus"])
             LT_dict[frequency].append(curve_fitting["Loss Tangent"])
@@ -188,14 +278,15 @@ class DMAMasterCurveDataParser(DMADataParser):
                # runtime_nfr, pressure_nfr, calc_dir_nfr = self.pressureparser(".", pressdir="x", add_savgol_filter=add_savgol_filter, add_gaussian_filter=add_gaussian_filter)
                 #os.chdir("../")
             freq_directories = os.listdir(".")
-            freq_directories.remove("noise_filter_run")
+            if "noise_filter_run" in freq_directories:
+                freq_directories.remove("noise_filter_run")
             #else:
             for freq_dir in freq_directories:
                 freq = float(re.sub("[^0-9.]", "", freq_dir)) * 1e9
                 os.chdir(freq_dir)
                 try:
-                    runtime, press, calc_dir = self.pressureparser(apply_savgol_filter=add_savgol_filter, apply_gaussian_filter=add_gaussian_filter, **{"simulation_dir": "."})
-                    results = self.fit_sin(runtime, press, **{"simulation_dir": calc_dir})
+                    runtime, press = self.pressureparser(apply_savgol_filter=add_savgol_filter, apply_gaussian_filter=add_gaussian_filter, **{"simulation_dir": os.getcwd()})
+                    results = self.fit_sin(runtime, press, **{"simulation_dir": os.getcwd()})
                     final_dict_storage[temp][freq] = results["Storage Modulus"]
                     final_dict_loss[temp][freq] = results["Loss Modulus"]
                     final_dict_tangent[temp][freq] = results["Loss Tangent"]
@@ -235,7 +326,7 @@ class DMAMasterCurveDataParser(DMADataParser):
             
 class ConvAnalysisParser(DMADataParser):
     
-    def runtime_conv_analysis(self, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
+    def runtime_conv_analysis(self, threshold=0.1, add_gaussian_filter=False, gaussian_sigma=6):
         os.chdir(self.calc_dir)
         os.chdir("frequencies")
         if "noise_filter_run" in os.listdir("."):
@@ -253,7 +344,7 @@ class ConvAnalysisParser(DMADataParser):
             LT_list = []
             diff_list = []
             optimalcycles_lst = []
-            timesteps, pressure, sim_dir = self.pressureparser(**{"simulation_dir": "."})
+            timesteps, pressure = self.pressureparser(**{"simulation_dir": os.getcwd()})
             period = int(subprocess.check_output("grep 'wiggle' in.*", shell=True).decode("utf-8").split()[8])
             dump_freq = int(subprocess.check_output("grep 'thermo' in.*", shell=True).decode("utf-8").split()[-1])
             runtime = int(subprocess.check_output("grep 'run' in.*", shell=True).decode("utf-8").split()[-1])
@@ -263,7 +354,7 @@ class ConvAnalysisParser(DMADataParser):
             old_results = 0
             for cycles in range(1, calc_cycles + 1):
                 sliced_runtime, sliced_pressure = timesteps[:datapoints_per_cycle * cycles], pressure[:datapoints_per_cycle * cycles]
-                results = self.fit_sin(sliced_runtime, sliced_pressure, **{"simulation_dir": "."})["Loss Tangent"]
+                results = self.fit_sin(sliced_runtime, sliced_pressure, **{"simulation_dir": os.getcwd()})["Loss Tangent"]
                 if old_results == 0 or abs(results - old_results) >= 0.1:
                     old_results = results
                 else:
@@ -278,58 +369,92 @@ class ConvAnalysisParser(DMADataParser):
             print("Optimal Number of Cycles", final_result[0])
             os.chdir("../")    
     
-    def strainsize_conv_analysis(self, threshold=0.1, add_gaussian_filter=True, gaussian_sigma=6):
-            os.chdir(self.calc_dir)
-            os.chdir("frequencies")
-            if "noise_filter_run" in os.listdir("."):
-                freq_directories_strain = os.listdir(".")
-                freq_directories_strain.remove("noise_filter_run")
-            else:
-                freq_directories_strain = (os.listdir("."))
-                #Since, there is going to only one frequency value
-            for frequency in freq_directories_strain:
-                os.chdir(frequency)
-                #Getting the list of strain subdirectories within frequency directory
-                strain_lst = []
-                LT_strainlst = []
-                LM_strainlst = []
-                SM_strainlst = []
-                R2_strainlst = []
-                for subdir in os.listdir("."):
-                    strain_val = float(subdir[:-9])
-                    strain_lst.append(strain_val)
-                    os.chdir(subdir)
-                    timesteps_strain, pressure_strain, sim_dirstrain = self.pressureparser(**{"simulation_dir": os.getcwd()}, apply_gaussian_filter=add_gaussian_filter, gaussian_sigma=gaussian_sigma)
-                    results_strain = self.fit_sin(timesteps_strain, pressure_strain, **{"simulation_dir": sim_dirstrain})
-                    SM_strainlst.append(results_strain["Storage Modulus"])
-                    LM_strainlst.append(results_strain["Loss Modulus"])
-                    LT_strainlst.append(results_strain["Loss Tangent"])
-                    R2_strainlst.append(results_strain["R2"])
-                    os.chdir("../")
-                    
-            # Sort the SM, LM, and LT data in ascending order
-            sorted_data = sorted(zip(strain_lst, SM_strainlst, LM_strainlst, LT_strainlst, R2_strainlst))
-            strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst = zip(*sorted_data)
-            
-            # Create the figure and subplots
-            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(5, 10))
+    def strainsize_conv_analysis(self, threshold=0.1, add_gaussian_filter=False, gaussian_sigma=6):
+        os.chdir(self.calc_dir)
+        os.chdir("frequencies")
+        if "noise_filter_run" in os.listdir("."):
+            freq_directories_strain = os.listdir(".")
+            freq_directories_strain.remove("noise_filter_run")
+        else:
+            freq_directories_strain = (os.listdir("."))
+            #Since, there is going to only one frequency value
+        for frequency in freq_directories_strain:
+            os.chdir(frequency)
+            #Getting the list of strain subdirectories within frequency directory
+            strain_lst = []
+            LT_strainlst = []
+            LM_strainlst = []
+            SM_strainlst = []
+            R2_strainlst = []
+            RMSE_strainlst = []
+            original_strainlst = []
+            for subdir in os.listdir("."):
+                strain_val = float(subdir[:-9])
+                strain_lst.append(strain_val)
+                os.chdir(subdir)
+                timesteps_strain, pressure_strain = self.pressureparser(**{"simulation_dir": os.getcwd()}, apply_gaussian_filter=add_gaussian_filter, gaussian_sigma=gaussian_sigma)
+                results_strain = self.fit_sin(timesteps_strain, pressure_strain, **{"simulation_dir": os.getcwd()})
+                SM_strainlst.append(results_strain["Storage Modulus"])
+                LM_strainlst.append(results_strain["Loss Modulus"])
+                LT_strainlst.append(results_strain["Loss Tangent"])
+                R2_strainlst.append(results_strain["R2"])
+                RMSE_strainlst.append(results_strain["RMSE"])
+                #original_strainlst.append(results_strain["Original Curve"])
+               # print(strain_lst, R2_strainlst)
+                os.chdir("../")
 
-            # Plot the data on each subplot
-            ax1.plot(strain_lst, SM_strainlst, '--o')
-            ax2.plot(strain_lst, LM_strainlst, '--o')
-            ax3.plot(strain_lst, LT_strainlst, '--o')
-            ax4.plot(strain_lst, R2_strainlst, '--o')
+        # Sort the SM, LM, and LT data in ascending order
+        sorted_data = sorted(zip(strain_lst, SM_strainlst, LM_strainlst, LT_strainlst, R2_strainlst, RMSE_strainlst))
+        strain_lst, SM_strainlst, LM_strainlst, LT_strainlst, R2_strainlst, RMSE_strainlst = map(list, zip(*sorted_data))
+        for i in range(len(strain_lst)):
+            if LT_strainlst[i] == None:
+                strain_lst[i] = None
+        def remove_none_elements(*lists):
+            filtered_lists = []
+            for lst in lists:
+                filtered_lists.append([element for element in lst if element is not None])
+            return tuple(filtered_lists)
+        strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst, RMSE_strainlst = remove_none_elements(strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst, RMSE_strainlst)
+        
+        
+        # Create the figure and subplots
+        fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(5, 1, sharex=True, figsize=(5, 10))
 
-            # Set labels and titles for each subplot
-            ax1.set_ylabel('Storage Modulus')
-            ax2.set_ylabel('Loss Modulus')
-            ax3.set_ylabel('Loss Tangent')
-            ax4.set_ylabel('R2 Score')
-            ax4.set_xlabel('Strain (%)')
-            ax4.set_xscale('log')
+        # Plot the data on each subplot
+        ax1.plot(strain_lst, SM_strainlst, '--o')
+        ax2.plot(strain_lst, LM_strainlst, '--o')
+        ax3.plot(strain_lst, LT_strainlst, '--o')
+        ax4.plot(strain_lst, R2_strainlst, '--o')
+        ax5.plot(strain_lst, RMSE_strainlst, '--o')
 
-            # Print out the best strain based on R2 score
-            max_index = R2_strainlst.index(max(R2_strainlst))
-            print("Best strain size: {}".format(strain_lst[max_index]))
-            # Display the plot
-            plt.show()
+        # Set labels and titles for each subplot
+        ax1.set_ylabel('Storage Modulus')
+        ax2.set_ylabel('Loss Modulus')
+        ax3.set_ylabel('Loss Tangent')
+        ax4.set_ylabel('R2 Score')
+        ax5.set_ylabel('RMSE')
+        ax5.set_xlabel('Strain (%)')
+        ax5.set_xscale('log')
+
+        # Print out the best strain based on R2 score and RMSE
+        def find_lowest_ranked_value(x, r2, rmse):
+            """
+            Finds the value in the list "x" that has the lowest ranking sum of its corresponding R2 and RMSE values.
+
+            Arguments:
+            x -- List of values.
+            r2 -- List of R2 values (same length as x).
+            rmse -- List of RMSE values (same length as x).
+
+            Returns:
+            The value in x that has the lowest ranking sum of its corresponding R2 and RMSE values.
+            """
+            ranks = []
+            for i in range(len(x)):
+                r2_rank = len(r2) - sorted(r2).index(r2[i])
+                rmse_rank = sorted(rmse).index(rmse[i])
+                ranks.append(r2_rank + rmse_rank)
+            min_rank_idx = ranks.index(min(ranks))
+            return x[min_rank_idx]
+        
+        print("Best strain size: {}".format(find_lowest_ranked_value(strain_lst, R2_strainlst, RMSE_strainlst)))
