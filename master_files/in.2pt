@@ -1,0 +1,17 @@
+IN_LMPDATA                    data.prefix
+IN_LMPTRJ                     prefix_2pt
+ANALYSIS_FRAME_INITIAL        1
+ANALYSIS_FRAME_FINAL          0
+ANALYSIS_FRAME_STEP           1
+ANALYSIS_VAC_CORLENGTH        0.5
+ANALYSIS_VAC_MEMORYMB         81000
+ANALYSIS_VAC_2PT              4
+ANALYSIS_OUT                  prefix_2pt
+ANALYSIS_LMP_TSTEP            0.001
+ANALYSIS_VAC_LINEAR_MOL       1
+ANALYSIS_VAC_ROTN_SYMMETRY    2
+ANALYSIS_VAC_FIXED_DF        648
+
+
+ANALYSIS_SHOW2PT            1
+

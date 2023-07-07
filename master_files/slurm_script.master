@@ -31,9 +31,11 @@ lmp_data_file=data.${prefix}
 module purge
 #module load cpu/0.15.4 intel/19.1.1.217 slurm mvapich2 cmake intel-mkl sdsc fftw/3.3.8 gsl
 #module load cpu/0.15.4 intel/19.1.1.217 sdsc slurm gcc/10.2.0 cmake intel-mkl mvapich2/2.3.4 amdfftw/2.2 python gsl
-module load cpu/0.15.4 gcc/10.2.0 slurm openmpi cmake gsl intel-mkl amdfftw
+module load cpu/0.15.4 gcc/10.2.0 slurm openmpi cmake gsl intel-mkl fftw amdfftw
 
 PARALLEL="srun --mpi=pmi2"
 LMP="/expanse/lustre/projects/csd626/tpascal/codes/bin/lmp_expanse -screen none -var rtemp $rtemp -var press $press"
 
 $PARALLEL $LMP -in ${lmp_equil_file} -log ${prefix}.${rtemp}K.equil.lammps.log
+
+#srun /home/tpascal/codes/bin/2pt_analysis ${prefix}_2pt.in
