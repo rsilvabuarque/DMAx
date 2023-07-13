@@ -17,8 +17,7 @@ def randomNumber(digits):
 
 class LammpsInputGenerator:
     """
-    A class to generate LAMMPS input sets. Utilizes Prof. Tod A. Pascal's createLammpsInput C++ code to generate LAMMPS input files.
-    
+    Base LAMMPS input generator. Utilizes Prof. Tod A. Pascal's createLammpsInput C++ code to generate LAMMPS input files.
     Attributes
     ----------
     structure_file : BGF|MSI|MOL2

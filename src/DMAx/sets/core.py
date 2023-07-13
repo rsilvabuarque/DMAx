@@ -1,6 +1,28 @@
-"""Core jobs for running LAMMPS calculations."""
+"""Module defining core LAMMPS input set generators."""
 
 from DMAx.sets.base import LammpsInputGenerator
+
+import os
+import subprocess
+import random
+
+import re
+import sys
+import numpy as np
+from math import log10
+
+def frequency_dirname_parser(frequency):
+    """
+    Function utilized to parse the directory names of .
+
+    Arguments:
+    digits -- Number of digits in the random number to be generated.
+    """
+    freq_range_dict = {"Hz": 1e0, "KHz": 1e3, "MHz": 1e6, "GHz": 1e9, "THz": 1e12, "PHz": 1e15, "EHz": 1e18}
+    for freq_mag, freq in freq_range_dict.items():
+        dirname_val = frequency / freq
+        if 1 <= dirname_val < 1000:
+            return "{}{}".format(dirname_val, freq_mag)
 
 class DMAInputGenerator(LammpsInputGenerator):
     def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=10, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
@@ -102,5 +124,3 @@ class DMAInputGenerator(LammpsInputGenerator):
                 os.chdir("{}_{}".format(frequency_dirname_parser(freq), i))
                 self.createLammpsInputDMA(freq, oscillation_amplitude_percentage=oscillation_amplitude_percentage, numcycles=numcycles, temperature=temperature, pressure=pressure, **{"calc_dir": ".", "stressdir": stressdir})
                 os.chdir("../")
-
-

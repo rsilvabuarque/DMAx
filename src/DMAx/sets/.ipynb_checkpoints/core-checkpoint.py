@@ -1,7 +1,5 @@
 """Core jobs for running LAMMPS calculations."""
 
-from DMAx.sets.base import LammpsInputGenerator
-
 class DMAInputGenerator(LammpsInputGenerator):
     def createLammpsInputDMA(self, frequency, temperature=300, pressure=1, timestep_unit_fs=1, oscillation_amplitude_percentage=0.04, numcycles=10, datapoints_per_cycle=500, tilt_analysis=False, nve=False, stressdir=None, master_inputs=None, **kwargs):
         temperature = kwargs.get('structure_file', self.temperature)

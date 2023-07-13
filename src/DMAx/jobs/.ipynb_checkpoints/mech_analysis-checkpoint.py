@@ -1,7 +1,3 @@
-"""Jobs used in the calculation of elastic tensors."""
-
-from DMAx.jobs.base import BaseLammpsMaker
-
 class DMAConvAnalysisInputGenerator(DMAInputGenerator):
     """
     LAMMPS input generator for the convergence analysis of parameters for Dynamic Mechanical Analysis.
