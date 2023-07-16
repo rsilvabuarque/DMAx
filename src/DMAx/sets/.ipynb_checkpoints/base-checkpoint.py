@@ -1,8 +1,12 @@
 """Module defining base LAMMPS input generator."""
 
+import re
 import os
+import sys
 import subprocess
+import numpy as np
 import random
+from math import log10
 
 def randomNumber(digits):
     """
@@ -17,7 +21,8 @@ def randomNumber(digits):
 
 class LammpsInputGenerator:
     """
-    Base LAMMPS input generator. Utilizes Prof. Tod A. Pascal's createLammpsInput C++ code to generate LAMMPS input files.
+    A class to generate LAMMPS input sets. Utilizes Prof. Tod A. Pascal's createLammpsInput C++ code to generate LAMMPS input files.
+    
     Attributes
     ----------
     structure_file : BGF|MSI|MOL2

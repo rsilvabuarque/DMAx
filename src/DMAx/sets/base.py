@@ -1,8 +1,12 @@
 """Module defining base LAMMPS input generator."""
 
+import re
 import os
+import sys
 import subprocess
+import numpy as np
 import random
+from math import log10
 
 def randomNumber(digits):
     """
