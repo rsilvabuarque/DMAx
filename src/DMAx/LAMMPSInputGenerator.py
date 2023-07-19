@@ -6,6 +6,8 @@ import numpy as np
 import random
 from math import log10
 
+from jobflow import job
+
 def randomNumber(digits):
     """
     Function utilized to generate a random number for modifying the velocity seed for each calculation.
@@ -29,6 +31,7 @@ def frequency_dirname_parser(frequency):
         dirname_val = frequency / freq
         if 1 <= dirname_val < 1000:
             return "{}{}".format(dirname_val, freq_mag)
+
 
 def submit_slurm_files(dir_path, avoid_containing_log=True):
     """
@@ -124,7 +127,7 @@ class LammpsInputGenerator:
     template : str
         Specifies the type of input file to create. See /home/tpascal/scripts/dat/LAMMPS (#change here) for a list. Current options include "2pt 2pt_f3c 2pt_tip4 anneal atom.eng battery biogroup bulk carbonates ced cnt cntWat cnt_h2o cof compress electrode entropy equil equil_new fep full gpcr heat ift md melt mesodna min mof nano110 nano_indent_x nano_indent_y nve polymer pre_fep pressureflow prod pulse reaxff rimse rimse_solvent solv solv.2pt solv.2pt.rigidSolu solv.atom.eng solv.atom.eng.rigidSolu solv.rigidSolu solvation solvation_f3c test thermal_conductivity thz-pulse viscosity water " or you can specify your own input file
     account: str
-        The sueprcomputer allocation to be used. If none is provided, will raise an error since an account must be provided for simulations to run.
+        The supercomputer allocation to be used. If none is provided, will raise an error since an account must be provided for simulations to run.
     nodes: int
         Number of nodes to be used in the supercomputer.
     ntasks_per_node: int
@@ -445,6 +448,8 @@ class DMAConvAnalysisInputGenerator(DMAInputGenerator):
             os.chdir("../")
 
 class DMAMasterCurveInputGenerator(DMAInputGenerator):
+    
+
     def MasterCurveCLI(self, polymer_glass_temperature, standard_numcycles, standard_strain_pc, num_frequencies=20, num_temperatures=10, temperature_interval=10, custom_frequency_range=None, custom_temperature_range=None, noise_filter_run=True, **kwargs):
         """
         Method for generating the LAMMPS input files for generating a mechanical loss master curve.

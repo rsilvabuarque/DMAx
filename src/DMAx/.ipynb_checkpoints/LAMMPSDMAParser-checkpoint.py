@@ -11,6 +11,8 @@ from mastercurves import MasterCurve
 from mastercurves.transforms import Multiply
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+from jobflow import job
+
 def extract_tot_eng(input_dir_path, output_file_path=None, plot=False, label=None, invert_sign=False):
     # Search for files with .log extension in the input directory
     log_files = [f for f in os.listdir(input_dir_path) if f.endswith('.log')]
@@ -264,6 +266,8 @@ class DMAErrorDataParser(DMADataParser):
         plot_error_bars(SM_dict, LM_dict, LT_dict)
             
 class DMAMasterCurveDataParser(DMADataParser):
+    
+    
     def master_curve_parser(self, add_savgol_filter=False, add_gaussian_filter=False):
         final_dict_storage, final_dict_loss, final_dict_tangent = {}, {}, {}
         os.chdir(self.calc_dir)
@@ -414,6 +418,7 @@ class ConvAnalysisParser(DMADataParser):
             for lst in lists:
                 filtered_lists.append([element for element in lst if element is not None])
             return tuple(filtered_lists)
+        
         strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst, RMSE_strainlst = remove_none_elements(strain_lst, LT_strainlst, LM_strainlst, SM_strainlst, R2_strainlst, RMSE_strainlst)
         
         
